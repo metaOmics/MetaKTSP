@@ -1,0 +1,15 @@
+Package: MetaKTSP
+Type: Package
+Title: A Meta-Analytic Top Scoring Pair Method for Robust Cross-Study
+        Validation of Omics Prediction Analysis
+Version: 1.0.2
+Date: 2016-08-10
+Author: SungHwan Kim, Chien-Wei Lin and George C. Tseng
+Maintainer: Chien-Wei Lin <masaki396@gmail.com>
+Description: This package implements a meta-analytic K top scoring pair (MetaKTSP)
+    algorithm that combines multiple transcriptomic studies and generates a robust
+    prediction model applicable to independent test studies.
+License: GPL-2
+Packaged: 2016-08-11 04:21:29 UTC; Masaki
+RoxygenNote: 5.0.1
+NeedsCompilation: no
