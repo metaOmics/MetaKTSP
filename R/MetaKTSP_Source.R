@@ -72,16 +72,13 @@ MetaTSP.Pvalue <- function(DList,  Method = "Fisher", K.max, is.VO=TRUE, Para.nu
   # Standardize the score
   out <- scale(out)
   Score.pvalue <- 1 - pnorm(out, mean = 0, sd = 1, lower.tail = TRUE, log.p = FALSE)
+  rownames(Score.pvalue) = NULL
 
   if(Method == "Fisher")
   {
   ##  Opposite direction p-value is required.
     Score.pvalue <- rbind(Score.pvalue, 1 - Score.pvalue)
   }
-
-  Meta.Score <- list()
-  Meta.Score$p <- as.matrix(Score.pvalue)
-  colnames(Meta.Score$p) <- names(DList)
 
   tmp.metaTSP <- switch( Method,
                          Stouffer = {
@@ -90,26 +87,21 @@ MetaTSP.Pvalue <- function(DList,  Method = "Fisher", K.max, is.VO=TRUE, Para.nu
                            upper.q <- quantile(Score_stouffer, probs = seq(0, 1, 0.05))[20]
                            lower.q <- quantile(Score_stouffer, probs = seq(0, 1, 0.05))[2]
                            stouffer.ind <- (Score_stouffer > upper.q) | (Score_stouffer < lower.q)
-                           Score.pvalue <- Score.pvalue[stouffer.ind, ]
-                           ind <- as.data.frame(ind[stouffer.ind, ], stringsAsFactors = F)
-                           # ind <- ind[stouffer.ind, ]
-                           cbind(ind, Score_stouffer = Score_stouffer[stouffer.ind])
+                           data.frame(ind[stouffer.ind, ], Score_stouffer = Score_stouffer[stouffer.ind], Score_quantile[stouffer.ind,], stringsAsFactors = F)
                          },
                          Fisher = {
                            tmp <-  -rowSums(log(Score.pvalue))
                            .ind <- rbind(ind, ind)
-                           .ind <- as.data.frame(.ind, stringsAsFactors = F)
                            score.direction <- c(rep(1,nrow(ind)),rep(-1,nrow(ind)))
-                           cbind(.ind, score.direction, tmp )
+                           data.frame(.ind, score.direction, tmp, -log(Score.pvalue), stringsAsFactors = F)
                          }
   )
 
   tspobj <- list()
   if(Method =="Fisher"){
-    tmp<-as.numeric(tmp.metaTSP[ ,6])
+    tmp <- tmp.metaTSP[ ,6]
     o <-  order(tmp, decreasing=TRUE)
-    tspobj$m.index <- tmp.metaTSP[o, ]
-    tspobj$m.index <- tspobj$m.index[1:Para.num.gene, ]
+    tspobj$m.index <- tmp.metaTSP[o[1:Para.num.gene], ]
   } else {
     tspobj$m.index <- tmp.metaTSP[order(abs(as.numeric(tmp.metaTSP[ ,5])), decreasing=TRUE ), ]
   }
@@ -135,9 +127,21 @@ MetaTSP.Pvalue <- function(DList,  Method = "Fisher", K.max, is.VO=TRUE, Para.nu
 
   tspobj$m.index <- tspobj$m.index[c(tmp.index, rep( FALSE, o.chs-length(tmp.index)))   ,]
 
+  if(Method == "Fisher"){
+    colnames(tspobj$m.index) = c("GeneIndex1", "GeneIndex2", "Gene1", "Gene2", "Direction", "Score_overall",
+                                 paste("Score_study", 1:length(DList), sep = ""))
+
+  } else {
+    colnames(tspobj$m.index) = c("GeneIndex1", "GeneIndex2", "Gene1", "Gene2", "Score_overall",
+                                 paste("Score_study", 1:length(DList), sep = ""))
+
+  }
+  gene.pair.table = tspobj$m.index[1:min(nrow(tspobj$m.index), K.max),]
+
   K <- K.max
   if(is.VO){
-    Total_tau <- foreach(k =  seq(3, dim(tspobj$m.index)[1]  ,2)[seq(3, dim(tspobj$m.index)[1]  ,2) <= K] ,.combine=c) %dopar% {
+    k.try = 2:K.max
+    Total_tau <- foreach(k =  k.try ,.combine=c) %dopar% {
       Var.0 <- var(apply(foreach(ii=1:k, .combine=rbind)%do%{
         as.numeric(foreach( j = 1:length(DList) ,.combine=c) %do% {
           label <- colnames(DList[[j]])
@@ -154,7 +158,7 @@ MetaTSP.Pvalue <- function(DList,  Method = "Fisher", K.max, is.VO=TRUE, Para.nu
     }
 
     i <- which(Total_tau==max(Total_tau))[1]
-    tspobj$m.index <- tspobj$m.index[1:seq(3, dim(tspobj$m.index)[1]  ,2)[i], ]
+    tspobj$m.index <- tspobj$m.index[1:k.try[i], ]
   } else {
 
     if(K==1){
@@ -165,10 +169,141 @@ MetaTSP.Pvalue <- function(DList,  Method = "Fisher", K.max, is.VO=TRUE, Para.nu
     }
   }
 
+  rownames(tspobj$m.index) <- rownames(gene.pair.table) <- NULL
   meta.tspobj <- list()
   meta.tspobj$model <- tspobj$m.index
   meta.tspobj$num.K <- dim(tspobj$m.index)[1]
+  meta.tspobj$gene.pair.table <- gene.pair.table
+  if(is.VO) meta.tspobj$VO <- Total_tau
 
+  return(meta.tspobj)
+}
+
+##' MetaTSP.mean is a function of a meta-analytic top scoring pair (MetaTSP) algorithm via Mean score method.
+##'
+##'
+##' @title A Meta-Analytic K Top Scoring Pair via Mean Score Method
+##' @param DList Input variable matrix (a list of multiple datasets; row=features, column=samples).
+##' @param K.max The maximum number of top score pairs.
+##' @param is.VO Logical value indicating whether K selection is Variance optimization (VO)
+##' @param quantile.index A quantile threshold for selecting top scoring pair. Default is 10.
+##' @return An object of class list is returned with components as following:
+##' model includes meta k top scoring pairs (n by k-1).
+##' num.K is the number of K meta top scoring pairs.
+##' @author Chien-Wei Lin
+##' @export
+##' @examples
+MetaTSP.mean <- function(DList, K.max, is.VO=TRUE, quantile.index=10){
+  # Description
+  #     Fit a prediction rule of meta top scoring pair
+  # Usage
+  #     S = MetaTSP(DList,  Method = "Fisher", K.max, is.VO=TRUE, Para.num.gene = 10000)
+  # Input
+  #     X = Input variable matrix (a list of multiple datasets; row=features, column=samples)
+  #     Method = "Fisher" = fisher's meta-analysis, "Stouffer" = Stouffer's meta-analysis, NULL = mean score method
+  #     K.max = # of top score pairs
+  #     is.VO = Logical value indicating whether K selection is Variance optimization (VO).
+  #     Para.num.gene = # of top scoring pairs that are initially considered.
+  # Output
+  #     meta.tspobj = a list of meta top scoring pairs results
+  #        meta.tspobj$model = Meta top scoring pairs (n by k-1)
+  #        meta.tspobj$num.K = # of K meta top scoring pairs
+
+  # Computing the scores of all gene pairs
+
+  out <- foreach( j=1:length(DList)) %dopar% {
+    dat  <- t(DList[[j]])
+    n <- dim(dat)[1] #number of samples
+    m <- dim(dat)[2] #number of features
+    grp <- as.numeric(rownames(dat))
+    labels <- as.character(unique(grp))
+    xx <- as.matrix(cbind(rep(1,n), grp))
+    hatxx <- solve(t(xx) %*% xx) %*% t(xx) #2 x n matrix
+    tmp <- foreach(i = c(1:(m-1))) %dopar% {
+      yy <- dat[ ,-c(1:i)] < dat[,i] # n x m matrix
+      t(t((hatxx %*% yy)[2,]))
+    }
+    tmp <-do.call(rbind, tmp)
+    return(tmp)
+  }
+  out <- do.call(cbind, out)
+
+  score <- rowSums(out)
+
+  tmp.thread <- abs(score) > quantile(abs(score), probs = seq(0, 1, 0.1))[quantile.index]
+  score <- score[tmp.thread]
+  out.tmp <- out[tmp.thread,]
+  rownames(out.tmp) = NULL
+
+  m <- dim(t(DList[[1]]))[2] #number of features
+  ind <- foreach(i=1:(m-1)) %dopar% {
+    dat  <- t(DList[[1]])
+    cbind(rep(i, length(i:m)-1), (i+1):m, rep(colnames(dat)[i], length(i:m)-1), colnames(dat)[(i+1):m])
+  }
+  ind <- do.call(rbind, ind)
+  ind <- ind[tmp.thread,]
+
+  o.score <- order(abs(score), decreasing=T)
+  o.chs = ifelse(dim(ind)[1]<1000, dim(ind)[1], 1000) #only use up to 1000 pairs
+  tspobj <- list()
+  tspobj$m.index <- data.frame(ind[o.score,][1:o.chs,], score[o.score][1:o.chs], out.tmp[o.score,][1:o.chs,], stringsAsFactors = F)
+  #---------------------------------------------------------------------------
+  # remove the genes that appeared more than one time
+  # note that, even only one gene in a pair appear multiple time,
+  # the entire pair was removed
+  #---------------------------------------------------------------------------
+  tmp.index <- c()
+  comp.tmp <- c()
+  i=1
+  repeat{
+    if(sum(comp.tmp %in% c(as.character(tspobj[[1]][i,1]),as.character(tspobj[[1]][i,2]))) == 0){
+      tmp.index[i] <- sum(comp.tmp %in% c(as.character(tspobj[[1]][i,1]),as.character(tspobj[[1]][i,2]))) == 0
+      comp.tmp <- c(comp.tmp, c(as.character(tspobj[[1]][i,1]),as.character(tspobj[[1]][i,2])))
+    }else{
+      tmp.index[i] <- sum(comp.tmp %in% c(as.character(tspobj[[1]][i,1]),as.character(tspobj[[1]][i,2]))) == 0
+    }
+    i <- i + 1
+    if( i == dim(tspobj$m.index)[1]) {break}
+  }
+  tspobj$m.index <- tspobj$m.index[c(tmp.index, rep( FALSE, o.chs-length(tmp.index))) ,]
+  colnames(tspobj$m.index) = c("GeneIndex1", "GeneIndex2", "Gene1", "Gene2", "Score_overall",
+                               paste("Score_study", 1:length(DList), sep = ""))
+  gene.pair.table = tspobj$m.index[1:min(nrow(tspobj$m.index), K.max),]
+  ### Variation optimization approach ###
+  if(is.VO){
+    # k.try = seq(3, dim(tspobj$m.index)[1]  ,2)[seq(3, dim(tspobj$m.index)[1]  ,2) <= K.max]
+    k.try = 2:K.max
+    Total_tau <- foreach(k = k.try,.combine=c) %dopar% {
+      Var.0 <- var(apply(foreach(ii=1:k, .combine=rbind)%do%{
+        as.numeric(foreach( j = 1:length(DList) ,.combine=c) %do% {
+          label <- colnames(DList[[j]])
+          DList[[j]][tspobj$m.index[ii, 3], label=="0" ]  >  DList[[j]][tspobj$m.index[ii, 4], label== "0" ]
+        })},2,sum))
+
+      Var.1 <- var(apply(foreach(ii=1:k, .combine=rbind)%do%{
+        as.numeric(foreach( j = 1:length(DList) ,.combine=c) %do% {
+          label <- colnames(DList[[j]])
+          DList[[j]][tspobj$m.index[ii, 3], label=="1" ]  >  DList[[j]][tspobj$m.index[ii, 4], label== "1" ]
+        })},2,sum))
+
+      sum(abs(as.numeric(tspobj$m.index[1:k, 5]))) / sqrt(Var.0 + Var.1)
+    }
+
+    i <- which(Total_tau==max(Total_tau))
+    # tspobj$m.index <- tspobj$m.index[1:seq(3, dim(tspobj$m.index)[1]  ,2)[i], ]
+    tspobj$m.index <- tspobj$m.index[1:k.try[i], ]
+  } else {
+
+    tspobj$m.index <- tspobj$m.index[1:K.max,]
+
+  }
+
+  rownames(tspobj$m.index) <- rownames(gene.pair.table) <- NULL
+  meta.tspobj <- list()
+  meta.tspobj$model <- tspobj$m.index
+  meta.tspobj$num.K <- dim(tspobj$m.index)[1]
+  meta.tspobj$gene.pair.table <- gene.pair.table
+  if(is.VO) meta.tspobj$VO <- Total_tau
   return(meta.tspobj)
 }
 
@@ -186,7 +321,7 @@ MetaTSP.Pvalue <- function(DList,  Method = "Fisher", K.max, is.VO=TRUE, Para.nu
 ##' @return "youden" is Youden index
 ##' @author Chien-Wei Lin
 ##' @export
-meta.mul.rule.predict <- function( test.dat, tspobj, K , is.youden=TRUE){
+meta.mul.rule.predict <- function(test.dat, tspobj, K , is.youden=TRUE){
   test.grp <- as.numeric(colnames(test.dat))
 
   if(K != 1){
@@ -245,116 +380,3 @@ predict.mtsp <- function(object, test.dat, K){
 }
 
 
-##' MetaTSP.mean is a function of a meta-analytic top scoring pair (MetaTSP) algorithm via Mean score method.
-##'
-##'
-##' @title A Meta-Analytic K Top Scoring Pair via Mean Score Method
-##' @param DList Input variable matrix (a list of multiple datasets; row=features, column=samples).
-##' @param K.max The maximum number of top score pairs.
-##' @param is.VO Logical value indicating whether K selection is Variance optimization (VO)
-##' @param quantile.index A quantile threshold for selecting top scoring pair. Default is 10.
-##' @return An object of class list is returned with components as following:
-##' model includes meta k top scoring pairs (n by k-1).
-##' num.K is the number of K meta top scoring pairs.
-##' @author Chien-Wei Lin
-##' @export
-##' @examples
-MetaTSP.mean <- function(DList, K.max , is.VO=TRUE, quantile.index=10){
-  # Description
-  #     Fit a prediction rule of meta top scoring pair
-  # Usage
-  #     S = MetaTSP(DList,  Method = "Fisher", K.max, is.VO=TRUE, Para.num.gene = 10000)
-  # Input
-  #     X = Input variable matrix (a list of multiple datasets; row=features, column=samples)
-  #     Method = "Fisher" = fisher's meta-analysis, "Stouffer" = Stouffer's meta-analysis, NULL = mean score method
-  #     K.max = # of top score pairs
-  #     is.VO = Logical value indicating whether K selection is Variance optimization (VO).
-  #     Para.num.gene = # of top scoring pairs that are initially considered.
-  # Output
-  #     meta.tspobj = a list of meta top scoring pairs results
-  #        meta.tspobj$model = Meta top scoring pairs (n by k-1)
-  #        meta.tspobj$num.K = # of K meta top scoring pairs
-
-  # Computing the scores of all gene pairs
-
-  out <- foreach( j=1:length(DList)) %dopar% {
-    dat  <- t(DList[[j]])
-    n <- dim(dat)[1]
-    m <- dim(dat)[2]
-    grp <- as.numeric(rownames(dat))
-    labels <- as.character(unique(grp))
-    xx <- as.matrix(cbind(rep(1,n), grp))
-    hatxx <- solve(t(xx) %*% xx) %*% t(xx)
-    tmp <- foreach(i = c(1:(m-1))) %dopar% {
-      yy <- dat[ ,-c(1:i)] < dat[,i]
-      t(t((hatxx %*% yy)[2,]))
-    }
-    tmp <-do.call(rbind, tmp)
-    return(tmp)
-  }
-  out <- do.call(cbind, out)
-
-  score <- rowSums(out)
-
-  tmp.thread <- abs(score) > quantile(abs(score), probs = seq(0, 1, 0.1))[quantile.index]
-  score <- score[tmp.thread]
-
-  m <- dim(t(DList[[1]]))[2]
-  ind <- foreach(i=1:(m-1)) %dopar% {
-    dat  <- t(DList[[1]])
-    cbind(rep(i, length(i:m)-1 ) ,   (i+1):m,  rep(colnames(dat)[i], length(i:m)-1)   ,   colnames(dat)[(i+1):m] )
-  }
-  ind <- do.call(rbind, ind)
-  ind <- ind[tmp.thread,]
-
-  o.score <- order(abs(score), decreasing=T)
-  o.chs = ifelse(dim(ind)[1]<1000, dim(ind)[1], 1000)
-  tspobj <- list()
-  tspobj$m.index <- cbind(ind[o.score,][1:o.chs,], score[o.score][1:o.chs])
-
-  tmp.index <- c()
-  comp.tmp <- c()
-  i=1
-  repeat{
-    if(sum(comp.tmp %in% c(as.character(tspobj[[1]][i,1]),as.character(tspobj[[1]][i,2]))) == 0){
-      tmp.index[i] <- sum(comp.tmp %in% c(as.character(tspobj[[1]][i,1]),as.character(tspobj[[1]][i,2]))) == 0
-      comp.tmp <- c(comp.tmp, c(as.character(tspobj[[1]][i,1]),as.character(tspobj[[1]][i,2])))
-    }else{
-      tmp.index[i] <- sum(comp.tmp %in% c(as.character(tspobj[[1]][i,1]),as.character(tspobj[[1]][i,2]))) == 0
-    }
-    i <- i + 1
-    if( i == dim(tspobj$m.index)[1]) {break}
-  }
-  tspobj$m.index <- tspobj$m.index[c(tmp.index, rep( FALSE, o.chs-length(tmp.index))) ,]
-
-  ### Variation optimization approach ###
-  if(is.VO){
-    Total_tau <- foreach(k =  seq(3, dim(tspobj$m.index)[1]  ,2)[seq(3, dim(tspobj$m.index)[1]  ,2) <= K.max] ,.combine=c) %dopar% {
-      Var.0 <- var(apply(foreach(ii=1:k, .combine=rbind)%do%{
-        as.numeric(foreach( j = 1:length(DList) ,.combine=c) %do% {
-          label <- colnames(DList[[j]])
-          DList[[j]][tspobj$m.index[ii, 3], label=="0" ]  >  DList[[j]][tspobj$m.index[ii, 4], label== "0" ]
-        })},2,sum))
-
-      Var.1 <- var(apply(foreach(ii=1:k, .combine=rbind)%do%{
-        as.numeric(foreach( j = 1:length(DList) ,.combine=c) %do% {
-          label <- colnames(DList[[j]])
-          DList[[j]][tspobj$m.index[ii, 3], label=="1" ]  >  DList[[j]][tspobj$m.index[ii, 4], label== "1" ]
-        })},2,sum))
-
-      sum(abs(as.numeric(tspobj$m.index[1:k, 5]))) / sqrt(Var.0 + Var.1)
-    }
-
-    i <- which(Total_tau==max(Total_tau))
-    tspobj$m.index <- tspobj$m.index[1:seq(3, dim(tspobj$m.index)[1]  ,2)[i], ]
-  } else {
-
-    tspobj$m.index <- tspobj$m.index[1:K.max,]
-
-  }
-
-  meta.tspobj <- list()
-  meta.tspobj$model <- tspobj$m.index
-  meta.tspobj$num.K <- dim(tspobj$m.index)[1]
-  return(meta.tspobj)
-}

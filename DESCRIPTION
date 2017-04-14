@@ -10,6 +10,6 @@ Description: This package implements a meta-analytic K top scoring pair (MetaKTS
     algorithm that combines multiple transcriptomic studies and generates a robust
     prediction model applicable to independent test studies.
 License: GPL-2
-Packaged: 2016-08-11 04:21:29 UTC; Masaki
+Packaged: 2016-09-22 02:46:41 UTC; Masaki
 RoxygenNote: 5.0.1
 NeedsCompilation: no
