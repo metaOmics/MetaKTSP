@@ -210,7 +210,6 @@ MetaTSP.mean <- function(DList, K.max, is.VO=TRUE, quantile.index=10){
   #        meta.tspobj$num.K = # of K meta top scoring pairs
 
   # Computing the scores of all gene pairs
-
   out <- foreach( j=1:length(DList)) %dopar% {
     dat  <- t(DList[[j]])
     n <- dim(dat)[1] #number of samples
@@ -241,7 +240,8 @@ MetaTSP.mean <- function(DList, K.max, is.VO=TRUE, quantile.index=10){
     cbind(rep(i, length(i:m)-1), (i+1):m, rep(colnames(dat)[i], length(i:m)-1), colnames(dat)[(i+1):m])
   }
   ind <- do.call(rbind, ind)
-  ind <- ind[tmp.thread,]
+ind <- ind[tmp.thread,]
+
 
   o.score <- order(abs(score), decreasing=T)
   o.chs = ifelse(dim(ind)[1]<1000, dim(ind)[1], 1000) #only use up to 1000 pairs
@@ -264,7 +264,7 @@ MetaTSP.mean <- function(DList, K.max, is.VO=TRUE, quantile.index=10){
     }
     i <- i + 1
     if( i == dim(tspobj$m.index)[1]) {break}
-  }
+}
   tspobj$m.index <- tspobj$m.index[c(tmp.index, rep( FALSE, o.chs-length(tmp.index))) ,]
   colnames(tspobj$m.index) = c("GeneIndex1", "GeneIndex2", "Gene1", "Gene2", "Score_overall",
                                paste("Score_study", 1:length(DList), sep = ""))
@@ -288,15 +288,15 @@ MetaTSP.mean <- function(DList, K.max, is.VO=TRUE, quantile.index=10){
 
       sum(abs(as.numeric(tspobj$m.index[1:k, 5]))) / sqrt(Var.0 + Var.1)
     }
-
-    i <- which(Total_tau==max(Total_tau))
-    # tspobj$m.index <- tspobj$m.index[1:seq(3, dim(tspobj$m.index)[1]  ,2)[i], ]
+    i <- which(Total_tau==max(Total_tau))[1]
+                                        # tspobj$m.index <- tspobj$m.index[1:seq(3, dim(tspobj$m.index)[1]  ,2)[i], ]
     tspobj$m.index <- tspobj$m.index[1:k.try[i], ]
   } else {
 
     tspobj$m.index <- tspobj$m.index[1:K.max,]
 
-  }
+}
+
 
   rownames(tspobj$m.index) <- rownames(gene.pair.table) <- NULL
   meta.tspobj <- list()
